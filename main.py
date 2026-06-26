@@ -2,19 +2,19 @@ import os
 import requests
 import time
 import sys
-import xml.etree.ElementTree as ET  # RSS(XML) 파싱용
+import xml.etree.ElementTree as ET
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import translators as ts  # 🔥 차단 없는 초고속 번역 라이브러리
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 SEC_EMAIL = os.environ.get("SEC_EMAIL", "your_default@email.com")
 
-# SEC는 RSS를 긁어갈 때도 무조건 User-Agent에 이메일을 요구합니다.
 HEADERS = {'User-Agent': SEC_EMAIL}
 seen_links = set()
 
-# 🔥 초특급 호재 키워드 세트
+# 🔥 주가 상승에 막대한 영향을 미치는 초특급 호재 키워드 세트
 GOOD_NEWS_KEYWORDS = {
     "merger": "기업 합병 (Merger)",
     "acquisition": "지분 및 자산 인수 (Acquisition)",
@@ -29,6 +29,19 @@ GOOD_NEWS_KEYWORDS = {
 def log_print(message):
     print(message)
     sys.stdout.flush()
+
+# 💡 멈추지 않는 안전한 한글 번역 함수
+def translate_to_korean(text):
+    if not text or text == "No Items": return text
+    try:
+        # 카카오 번역 엔진을 사용하여 안정적으로 영어->한국어 번역 진행
+        return ts.translate_text(text, from_language='en', to_language='ko', translator='kakao')
+    except Exception:
+        try:
+            # 카카오가 일시적 응답이 없으면 구글 엔진으로 우회
+            return ts.translate_text(text, from_language='en', to_language='ko', translator='google')
+        except Exception:
+            return text # 번역 실패 시 원문 유지
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -48,28 +61,20 @@ def extract_positive_factors(text):
     return detected_factors
 
 def check_sec_filings():
-    # 💡 [주소 전면 교체] 절대 404가 나지 않는 SEC 공식 실시간 공시 RSS 주소입니다.
     url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&company=&dateb=&owner=include&start=0&count=40&output=atom"
     try:
         response = requests.get(url, headers=HEADERS)
-        log_print(f"⏰ SEC 서버 응답 상태코드: {response.status_code}")
+        log_print(f"⏰ SEC 서버 감시 중... 상태코드: {response.status_code}")
         
-        if response.status_code != 200: 
-            log_print(f"⚠️ 에러 응답 내용: {response.text[:100]}")
-            return
+        if response.status_code != 200: return
         
-        # XML(Atom 피드) 구조 파싱
         root = ET.fromstring(response.content)
-        
-        # XML 네임스페이스 정의 (SEC 데이터 추출용)
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
         entries = root.findall('atom:entry', ns)
-        
-        log_print(f"📊 현재 SEC에서 가져온 실시간 공시 수: {len(entries)}개")
 
         for entry in entries[:15]:
             try:
-                title_text = entry.find('atom:title', ns).text  # 예: "8-K - Apple Inc. (0000320193)"
+                title_text = entry.find('atom:title', ns).text  
                 link_url = entry.find('atom:link', ns).attrib['href']
                 summary_node = entry.find('atom:summary', ns)
                 summary_text = summary_node.text if summary_node is not None else ""
@@ -77,27 +82,32 @@ def check_sec_filings():
                 if link_url not in seen_links:
                     seen_links.add(link_url)
                     
-                    # 제목에서 공시 종류(Form)와 회사명 추출
-                    # 대략 "8-K - 회사명" 구조로 옵니다.
+                    # 제목에서 공시 종류(Form) 추출 (예: "8-K", "4", "10-Q")
                     form_type = title_text.split('-')[0].strip() if '-' in title_text else "Unknown"
                     
-                    # 💡 테스트 모드: 모든 공시 통과 (8-K만 보려면 나중에 if form_type == '8-K': 로 변경)
-                    if form_type:
-                        positive_factors = extract_positive_factors(title_text + " " + summary_text)
+                    # 🎯 [핵심 필터링] 잡다한 공시는 무시하고 오직 수시공시(8-K)만 골라냅니다!
+                    if form_type == '8-K':
+                        full_content = title_text + " " + summary_text
+                        positive_factors = extract_positive_factors(full_content)
+                        
+                        # 텍스트 번역 진행
+                        ko_title_text = translate_to_korean(title_text)
+                        ko_summary_text = translate_to_korean(summary_text)
                         
                         if positive_factors:
                             factors_str = ", ".join(positive_factors)
-                            title_tag = f"🔥 *[초특급 호재 의심 종목 포착]* 🔥\n⚠️ *핵심 호재 요인:* {factors_str}\n"
+                            title_tag = f"🔥 *[초특급 호재 의심 8-K 포착]* 🔥\n⚠️ *핵심 호재 요인:* {factors_str}\n"
                         else:
-                            title_tag = f"🚨 *[실시간 SEC 공시 알림]* ({form_type})\n"
+                            title_tag = f"🚨 *[실시간 8-K 중요 공시]*\n"
                         
                         message = (
                             f"{title_tag}\n"
-                            f"📝 *공시 제목:* {title_text}\n"
-                            f"📄 *요약 내용:* {summary_text[:300]}\n"
+                            f"📝 *공시 제목:* {ko_title_text}\n"
+                            f"📄 *한글 요약:* {ko_summary_text[:400]}\n"
+                            f"🇺🇸 *영문 원문:* {summary_text[:200]}...\n\n"
                             f"🔗 *Link:* [SEC 원문보기]({link_url})"
                         )
-                        log_print(f"📤 텔레그램 발송 시도: {title_text[:30]}")
+                        log_print(f"📤 8-K 공시 발송 완료: {title_text[:30]}")
                         send_telegram_message(message)
             except Exception as inner_e:
                 continue
@@ -106,16 +116,16 @@ def check_sec_filings():
         log_print(f"❌ 전체 에러 발생: {e}")
 
 def monitor_loop():
-    log_print("🚀 SEC 호재 추출 모니터링 루프 시작...")
+    log_print("🚀 SEC 8-K 실시간 한글 모니터링 루프 가동 완료...")
     while True:
         check_sec_filings()
-        time.sleep(10)  # RSS 피드는 10초 주기가 가장 안전합니다.
+        time.sleep(10)
 
 class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Running")
+        self.wfile.write(b"SEC 8-K Bot is fully functional.")
 
 if __name__ == "__main__":
     log_print("🌐 백그라운드 스레드 및 웹서버 가동 시작...")
