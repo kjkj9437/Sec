@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import sys  # 🔥 실시간 로그 강제 출력을 위해 추가
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -23,13 +24,19 @@ GOOD_NEWS_KEYWORDS = {
     "spacex": "스페이스X 관련 호재 (SpaceX Related)"
 }
 
+# 💡 로그를 즉시 화면에 밀어내는 전용 함수
+def log_print(message):
+    print(message)
+    sys.stdout.flush()  # 🔥 메모리에 머물지 않고 Render 로그창에 즉시 즉시 출력하도록 강제 설정
+
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try: 
-        requests.post(url, json=payload)
+        res = requests.post(url, json=payload)
+        log_print(f"📡 텔레그램 서버 응답: {res.status_code} -> {res.text}")
     except Exception as e: 
-        print(f"텔레그램 전송 실패: {e}")
+        log_print(f"❌ 텔레그램 전송 중 예외 발생: {e}")
 
 def extract_positive_factors(text):
     detected_factors = []
@@ -43,25 +50,37 @@ def check_sec_filings():
     url = "https://data.sec.gov/submissions/latest-filings.json"
     try:
         response = requests.get(url, headers=HEADERS)
-        print(f"⏰ SEC 체크 중... 상태코드: {response.status_code}") # 3초마다 찍히는지 확인용 로그
+        log_print(f"⏰ SEC 데이터 요청 상태코드: {response.status_code}")
         
-        if response.status_code != 200: return
+        if response.status_code != 200: 
+            log_print(f"⚠️ SEC 서버 연결이 원활하지 않습니다. 응답내용: {response.text[:100]}")
+            return
         
         data = response.json()
+        # 구조가 바뀌었을 경우를 대비해 안전하게 딕셔너리 내부 확인
         filings = data.get('actions', [])
+        if not filings and 'filings' in data:
+            filings = data.get('filings', {}).get('recent', [])
         
+        # 가져온 데이터가 리스트 형태가 아닐 경우 처리
+        if not isinstance(filings, list):
+            log_print("⚠️ SEC 공시 데이터 구조가 예상과 다릅니다.")
+            return
+
         for filing in filings[:15]:
+            if not isinstance(filing, dict): continue
+            
             accession_num = filing.get('accessionNumber')
             form_type = filing.get('form')
             ticker = filing.get('ticker', 'N/A')
-            company_name = filing.get('name')
+            company_name = filing.get('name', 'Unknown')
             
-            if accession_num not in seen_filings:
+            if accession_num and accession_num not in seen_filings:
                 seen_filings.add(accession_num)
                 
-                # 테스트 모드: 우선 모든 공시가 다 텔레그램으로 꽂히도록 설정
+                # 테스트 모드: 모든 공시 통과
                 if form_type:
-                    cik = filing.get('cik')
+                    cik = filing.get('cik', '')
                     doc_link = f"https://www.sec.gov/edgar/browse/?CIK={cik}"
                     
                     items = filing.get('items', '')
@@ -82,13 +101,13 @@ def check_sec_filings():
                         f"📝 *Content:* {items_text}\n"
                         f"🔗 *Link:* [SEC 원문보기]({doc_link})"
                     )
+                    log_print(f"📤 텔레그램 발송 시도 종목: {ticker} ({form_type})")
                     send_telegram_message(message)
     except Exception as e:
-        print(f"에러 발생: {e}")
+        log_print(f"❌ 에러 발생: {e}")
 
-# 3초마다 SEC를 감시하는 전용 독립 루프 함수
 def monitor_loop():
-    print("🚀 SEC 호재 추출 모니터링 루프 시작...")
+    log_print("🚀 SEC 호재 추출 모니터링 루프 시작...")
     while True:
         check_sec_filings()
         time.sleep(3)
@@ -99,14 +118,11 @@ class WebServerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is Running")
 
-# Render가 프로그램을 실행할 때 실행되는 메인 시작 지점
 if __name__ == "__main__":
-    # 1. 텔레그램 모니터링 루프를 백그라운드(독립 스레드)에서 먼저 무조건 시작시킵니다.
+    log_print("🌐 Render 전용 백그라운드 스레드 및 웹서버 가동 준비...")
     monitor_thread = Thread(target=monitor_loop)
     monitor_thread.daemon = True
     monitor_thread.start()
     
-    # 2. 메인 스레드에서는 Render 서버용 웹서버를 실행하여 봇을 영원히 유지시킵니다.
-    print("🌐 Render 웹서버 가동...")
     server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), WebServerHandler)
     server.serve_forever()
