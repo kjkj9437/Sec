@@ -2,7 +2,7 @@ import os
 import requests
 import time
 import sys
-import re  # 🔥 HTML 태그 제거를 위해 정규표현식 라이브러리 추가
+import re
 import xml.etree.ElementTree as ET
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -30,32 +30,34 @@ def log_print(message):
     print(message)
     sys.stdout.flush()
 
-# 💡 <b>, <br> 같은 지저분한 HTML 태그를 흔적도 없이 지워주는 안전장치 함수
 def clean_html(text):
     if not text: return ""
-    # <br> 이나 <br/> 태그는 깔끔하게 줄바꿈(\n)으로 치환합니다.
     text = re.sub(r'<br\s*/?>', '\n', text)
-    # 그 외 나머지 모든 <태그>들은 전부 빈 칸으로 날려버립니다.
     clean_text = re.sub(r'<[^>]+>', '', text)
     return clean_text.strip()
 
+# 💡 무한 멈춤을 방지하는 2중 안전 번역 함수
 def translate_to_korean(text):
     if not text or text == "No Items": return text
-    # 태그를 먼저 지운 깨끗한 상태에서 300자만 잘라 번역 요청합니다.
-    safe_text = clean_html(text)[:300]
+    safe_text = clean_html(text)[:250] # 글자 수를 더 안전하게 줄임
+    
+    # 1차 시도: 카카오 번역 (타임아웃 5초 제한)
     try:
-        return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='kakao')
+        return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='kakao', timeout=5)
     except Exception:
+        # 2차 시도: 구글 번역 우회 (타임아웃 5초 제한)
         try:
-            return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='google')
+            time.sleep(1) # 차단 방지를 위한 미세한 쉬어가기
+            return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='google', timeout=5)
         except Exception:
-            return safe_text
+            log_print("⚠️ 번역 엔진 모두 차단 혹은 지연됨 -> 원문으로 대체")
+            return safe_text # 번역기가 다 먹통이면 멈추지 말고 영문 그대로 리턴!
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try: 
-        res = requests.post(url, json=payload)
+        res = requests.post(url, json=payload, timeout=10) # 텔레그램 서버 지연 방지
         log_print(f"📡 텔레그램 전송 결과: {res.status_code}")
     except Exception as e: 
         log_print(f"❌ 텔레그램 전송 실패: {e}")
@@ -71,7 +73,8 @@ def extract_positive_factors(text):
 def check_sec_filings():
     url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&company=&dateb=&owner=include&start=0&count=40&output=atom"
     try:
-        response = requests.get(url, headers=HEADERS)
+        # SEC 서버 요청에도 타임아웃 10초 설정
+        response = requests.get(url, headers=HEADERS, timeout=10)
         log_print(f"⏰ SEC 서버 감시 중... 상태코드: {response.status_code}")
         
         if response.status_code != 200: return
@@ -96,12 +99,9 @@ def check_sec_filings():
                         full_content = title_text + " " + summary_text
                         positive_factors = extract_positive_factors(full_content)
                         
-                        # 원문에서 태그 제거 후 한글 번역 진행
                         ko_title_text = translate_to_korean(title_text)
                         ko_summary_text = translate_to_korean(summary_text)
-                        
-                        # 영어 원문도 텔레그램에 깨끗하게 보여주기 위해 태그 제거
-                        clean_summary_en = clean_html(summary_text)[:150]
+                        clean_summary_en = clean_html(summary_text)[:120]
                         
                         if positive_factors:
                             factors_str = ", ".join(positive_factors)
@@ -117,6 +117,7 @@ def check_sec_filings():
                             f"🔗 *Link:* [SEC 원문보기]({link_url})"
                         )
                         send_telegram_message(message)
+                        time.sleep(2) # 텔레그램 도배 방지 및 번역기 과부하 방지용 2초 휴식
             except Exception as inner_e:
                 log_print(f"❌ 개별 루프 내 에러 건너뜀: {inner_e}")
                 continue
@@ -128,13 +129,13 @@ def monitor_loop():
     log_print("🚀 SEC 8-K 실시간 한글 모니터링 루프 가동 완료...")
     while True:
         check_sec_filings()
-        time.sleep(10)
+        time.sleep(12) # 호출 주기를 12초로 살짝 늘려 차단 확률을 대폭 줄입니다.
 
 class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"SEC 8-K Bot is running perfectly with HTML cleaner.")
+        self.wfile.write(b"SEC 8-K Bot is running perfectly with Timeout protection.")
 
 if __name__ == "__main__":
     log_print("🌐 백그라운드 스레드 및 웹서버 가동 시작...")
