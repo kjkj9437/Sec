@@ -43,7 +43,7 @@ def check_sec_filings():
     url = "https://data.sec.gov/submissions/latest-filings.json"
     try:
         response = requests.get(url, headers=HEADERS)
-        print(f"⏰ SEC 체크 중... 상태코드: {response.status_code}") # 작동 여부 확인용 로그
+        print(f"⏰ SEC 체크 중... 상태코드: {response.status_code}") # 3초마다 찍히는지 확인용 로그
         
         if response.status_code != 200: return
         
@@ -59,7 +59,7 @@ def check_sec_filings():
             if accession_num not in seen_filings:
                 seen_filings.add(accession_num)
                 
-                # 테스트를 위해 모든 공시를 다 받도록 열어두었습니다!
+                # 테스트 모드: 우선 모든 공시가 다 텔레그램으로 꽂히도록 설정
                 if form_type:
                     cik = filing.get('cik')
                     doc_link = f"https://www.sec.gov/edgar/browse/?CIK={cik}"
@@ -67,7 +67,6 @@ def check_sec_filings():
                     items = filing.get('items', '')
                     items_text = ", ".join([i.strip() for i in items.split(',')]) if items else "No Items"
                     
-                    # 호재 키워드 추출
                     positive_factors = extract_positive_factors(items_text)
                     
                     if positive_factors:
@@ -87,6 +86,7 @@ def check_sec_filings():
     except Exception as e:
         print(f"에러 발생: {e}")
 
+# 3초마다 SEC를 감시하는 전용 독립 루프 함수
 def monitor_loop():
     print("🚀 SEC 호재 추출 모니터링 루프 시작...")
     while True:
@@ -99,7 +99,14 @@ class WebServerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is Running")
 
+# Render가 프로그램을 실행할 때 실행되는 메인 시작 지점
 if __name__ == "__main__":
-    Thread(target=monitor_loop, daemon=True).start()
+    # 1. 텔레그램 모니터링 루프를 백그라운드(독립 스레드)에서 먼저 무조건 시작시킵니다.
+    monitor_thread = Thread(target=monitor_loop)
+    monitor_thread.daemon = True
+    monitor_thread.start()
+    
+    # 2. 메인 스레드에서는 Render 서버용 웹서버를 실행하여 봇을 영원히 유지시킵니다.
+    print("🌐 Render 웹서버 가동...")
     server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), WebServerHandler)
     server.serve_forever()
