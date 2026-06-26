@@ -69,7 +69,7 @@ def check_sec_filings():
             if accession_num not in seen_filings:
                 seen_filings.add(accession_num)
                 
-                if form_type == '8-K':
+                if form_type:
                     cik = filing.get('cik')
                     doc_link = f"https://www.sec.gov/edgar/browse/?CIK={cik}"
                     
