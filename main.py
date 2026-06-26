@@ -2,6 +2,7 @@ import os
 import requests
 import time
 import sys
+import re  # 🔥 HTML 태그 제거를 위해 정규표현식 라이브러리 추가
 import xml.etree.ElementTree as ET
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -29,18 +30,26 @@ def log_print(message):
     print(message)
     sys.stdout.flush()
 
-# 💡 글자 수를 안전하게 제한하여 에러를 뿜지 않게 만든 번역 함수
+# 💡 <b>, <br> 같은 지저분한 HTML 태그를 흔적도 없이 지워주는 안전장치 함수
+def clean_html(text):
+    if not text: return ""
+    # <br> 이나 <br/> 태그는 깔끔하게 줄바꿈(\n)으로 치환합니다.
+    text = re.sub(r'<br\s*/?>', '\n', text)
+    # 그 외 나머지 모든 <태그>들은 전부 빈 칸으로 날려버립니다.
+    clean_text = re.sub(r'<[^>]+>', '', text)
+    return clean_text.strip()
+
 def translate_to_korean(text):
     if not text or text == "No Items": return text
-    # ⚠️ 번역기 서버가 터지지 않도록 딱 앞부분 300자만 잘라서 번역 요청합시다.
-    safe_text = str(text)[:300]
+    # 태그를 먼저 지운 깨끗한 상태에서 300자만 잘라 번역 요청합니다.
+    safe_text = clean_html(text)[:300]
     try:
         return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='kakao')
     except Exception:
         try:
             return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='google')
         except Exception:
-            return safe_text # 둘 다 실패하면 그냥 잘린 영문 원문 출력
+            return safe_text
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -81,16 +90,18 @@ def check_sec_filings():
                 if link_url not in seen_links:
                     seen_links.add(link_url)
                     
-                    # 🎯 [필터링 완화] 제목에 '8-K'라는 핵심 단어가 꽂혀있으면 무조건 통과시킵니다. (8-K/A 등 포함)
                     if '8-K' in title_text:
                         log_print(f"🎯 8-K 공시 포착! 분석 및 번역 진입: {title_text[:40]}")
                         
                         full_content = title_text + " " + summary_text
                         positive_factors = extract_positive_factors(full_content)
                         
-                        # 안전하게 슬라이싱된 번역 진행
+                        # 원문에서 태그 제거 후 한글 번역 진행
                         ko_title_text = translate_to_korean(title_text)
                         ko_summary_text = translate_to_korean(summary_text)
+                        
+                        # 영어 원문도 텔레그램에 깨끗하게 보여주기 위해 태그 제거
+                        clean_summary_en = clean_html(summary_text)[:150]
                         
                         if positive_factors:
                             factors_str = ", ".join(positive_factors)
@@ -100,9 +111,9 @@ def check_sec_filings():
                         
                         message = (
                             f"{title_tag}\n"
-                            f"📝 *공시 제목:* {ko_title_text}\n"
-                            f"📄 *한글 요약:* {ko_summary_text}\n"
-                            f"🇺🇸 *영문 원문:* {summary_text[:150]}...\n\n"
+                            f"📝 *공시 제목:* {ko_title_text}\n\n"
+                            f"📄 *한글 요약:*\n{ko_summary_text}\n\n"
+                            f"🇺🇸 *영문 원문:*\n{clean_summary_en}...\n\n"
                             f"🔗 *Link:* [SEC 원문보기]({link_url})"
                         )
                         send_telegram_message(message)
@@ -123,7 +134,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"SEC 8-K Bot is running perfectly.")
+        self.wfile.write(b"SEC 8-K Bot is running perfectly with HTML cleaner.")
 
 if __name__ == "__main__":
     log_print("🌐 백그라운드 스레드 및 웹서버 가동 시작...")
