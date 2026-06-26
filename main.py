@@ -15,7 +15,6 @@ SEC_EMAIL = os.environ.get("SEC_EMAIL", "your_default@email.com")
 HEADERS = {'User-Agent': SEC_EMAIL}
 seen_links = set()
 
-# 🔥 초특급 호재 단어 조합 (8-K, 6-K 등 본문 분석용)
 GOOD_NEWS_KEYWORDS = {
     "merger": "기업 합병 (Merger)",
     "acquisition": "지분 및 자산 인수 (Acquisition)",
@@ -36,6 +35,26 @@ def clean_html(text):
     text = re.sub(r'<br\s*/?>', '\n', text)
     clean_text = re.sub(r'<[^>]+>', '', text)
     return clean_text.strip()
+
+# 💡 공시 제목에서 회사명만 깔끔하게 추출하는 함수
+def extract_company_name(title):
+    if not title: return "알 수 없는 기업"
+    try:
+        # 패턴 1: "8-K - COMPANY NAME" 형식일 때 뒤의 회사명 추출
+        if ' - ' in title:
+            parts = title.split(' - ')
+            # 만약 앞에 Form 종류가 왔다면 두 번째 섹션이 회사명
+            name = parts[1] if len(parts) > 1 else parts[0]
+            # 회사명 뒤에 붙은 CIK 번호나 불필요한 괄호 제거
+            name = re.sub(r'\s*\([^)]*\)', '', name)
+            return name.strip().upper()
+        
+        # 패턴 2: CIK 번호가 앞에 나오는 특수 케이스 처리
+        clean_title = re.sub(r'^\d+\s*-\s*', '', title)
+        clean_title = re.sub(r'\s*\([^)]*\)', '', clean_title)
+        return clean_title.strip().upper()
+    except Exception:
+        return "기업명 분석 보류 (원문 참조)"
 
 def translate_to_korean(text):
     if not text or text == "No Items": return text
@@ -88,7 +107,6 @@ def check_sec_filings():
                 if link_url not in seen_links:
                     seen_links.add(link_url)
                     
-                    # 🎯 탐지 타겟 설정: 8-K, 6-K, Form 4, 대량지분공시(13G/13D)
                     is_target = False
                     form_type = "공시"
                     
@@ -99,22 +117,22 @@ def check_sec_filings():
                     elif 'SC 13G' in title_text or 'SC 13D' in title_text:
                         is_target, form_type = True, "지분대량보유(5%↑)"
                     elif 'Form 4' in title_text:
-                        # ⚠️ Form 4 중에서 매도(Sale)는 거르고 오직 매수(P 또는 Purchase) 조건만 통과시킵니다.
                         if ' code: P ' in summary_text.lower() or 'purchase' in summary_text.lower():
                             is_target, form_type = True, "내부자 대량매수(Form 4)"
                     
                     if is_target:
                         log_print(f"🎯 [{form_type}] 포착! 분석 및 번역 시작: {title_text[:40]}")
                         
+                        # 🏢 회사 이름 실시간 추출
+                        company_name = extract_company_name(title_text)
+                        
                         full_content = title_text + " " + summary_text
                         positive_factors = extract_positive_factors(full_content)
                         
-                        # 한국어 변환 및 본문 정리
                         ko_title_text = translate_to_korean(title_text)
                         ko_summary_text = translate_to_korean(summary_text)
                         clean_summary_en = clean_html(summary_text)[:120]
                         
-                        # 타이틀 태그 구성
                         if "Form 4" in form_type:
                             title_tag = f"💎 *[내부자 지분 매수 포착 (Form 4)]* 💎\n⚠️ *내용:* 임원진이 자기 돈으로 주식을 샀습니다!\n"
                         elif "지분대량보유" in form_type:
@@ -125,8 +143,10 @@ def check_sec_filings():
                         else:
                             title_tag = f"🚨 *[실시간 {form_type}]*\n"
                         
+                        # 📝 메시지 상단에 회사명 칸을 굵고 가독성 좋게 명시합니다.
                         message = (
                             f"{title_tag}\n"
+                            f"🏢 *대상 기업:* `{company_name}`\n"
                             f"📝 *공시 분류:* {form_type}\n"
                             f"📌 *공시 제목:* {ko_title_text}\n\n"
                             f"📄 *한글 요약:*\n{ko_summary_text}\n\n"
@@ -134,7 +154,7 @@ def check_sec_filings():
                             f"🔗 *Link:* [SEC 원문보기]({link_url})"
                         )
                         send_telegram_message(message)
-                        time.sleep(2) # 차단 방지 딜레이
+                        time.sleep(2)
             except Exception as inner_e:
                 log_print(f"❌ 개별 루프 내 에러 건너뜀: {inner_e}")
                 continue
@@ -152,7 +172,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"SEC Multi-Filing Master Bot is running.")
+        self.wfile.write(b"SEC Multi-Filing Master Bot is running with Company Extractor.")
 
     def do_HEAD(self):
         self.send_response(200)
