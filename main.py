@@ -55,6 +55,8 @@ def check_sec_filings():
     url = "https://data.sec.gov/submissions/latest-filings.json"
     try:
         response = requests.get(url, headers=HEADERS)
+        print(f"SEC 응답 코드: {response.status_code}")
+        print(f"가져온 공시 개수: {len(response.json().get('actions', []))}")
         if response.status_code != 200: return
         
         data = response.json()
