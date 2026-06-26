@@ -46,18 +46,13 @@ def extract_company_name(title):
     except Exception:
         return "기업명 분석 보류"
 
-# 🔍 [수정 핵심] 인덱스 페이지를 진짜 공시 본문 웹페이지 주소로 치환하는 함수
 def convert_to_real_doc_url(index_url):
-    # 예시: .../edgar/data/12345/0001193125-26-123456-index.htm
-    # -> .../edgar/data/12345/000119312526123456/0001193125-26-123456.htm
     if "-index.htm" in index_url:
         base_url = index_url.replace("-index.htm", "")
-        # 일련번호에서 하이픈 제거한 폴더명 생성
         parts = base_url.split('/')
         if parts:
-            accession_no = parts[-1]  # 0001193125-26-123456
+            accession_no = parts[-1]
             accession_no_clean = accession_no.replace("-", "")
-            # 진짜 본문 주소로 재조립
             real_doc_url = index_url.replace(f"{accession_no}-index.htm", f"{accession_no_clean}/{accession_no}.htm")
             return real_doc_url
     return index_url
@@ -67,7 +62,6 @@ def crawl_real_sec_content(url):
         real_url = convert_to_real_doc_url(url)
         res = session.get(real_url, timeout=8)
         
-        # 만약 치환한 주소가 404 등이 나면 원래 인덱스 주소로 백업 시도
         if res.status_code != 200:
             res = session.get(url, timeout=6)
             if res.status_code != 200: return ""
@@ -80,7 +74,6 @@ def crawl_real_sec_content(url):
         plain_text = re.sub(r'<[^>]+>', '', html_content)
         plain_text = re.sub(r'\s+', ' ', plain_text)
         
-        # "Javascript 불필요" 보안 문구 등이 여전히 긁힐 경우를 방지하기 위해 필터링
         if "uses javascript" in plain_text.lower() or "browser" in plain_text.lower():
             return ""
 
@@ -88,13 +81,16 @@ def crawl_real_sec_content(url):
         if item_match:
             return item_match.group(1)[:400].strip()
         
-        return plain_text[:300].strip()
+        # 의미 있는 텍스트가 최소 40자 이상 있을 때만 반환
+        if len(plain_text.strip()) > 40:
+            return plain_text[:300].strip()
+        return ""
     except Exception as e:
         log_print(f"⚠️ 원문 크롤링 실패: {e}")
         return ""
 
 def translate_to_korean(text):
-    if not text: return "내용 없음"
+    if not text or text.strip() == "": return "내용 없음"
     safe_text = text[:250]
     try:
         return ts.translate_text(safe_text, from_language='en', to_language='ko', translator='kakao', timeout=4)
@@ -156,15 +152,23 @@ def check_sec_filings():
                     
                     if is_target:
                         company_name = extract_company_name(title_text)
-                        log_print(f"🎯 [{company_name}] {form_type} 발견 -> 원문 다이렉트 추적")
+                        log_print(f"🎯 [{company_name}] {form_type} 발견 -> 본문 파싱 가동")
                         
                         real_content = crawl_real_sec_content(link_url)
                         
-                        # 만약 우회 크롤링도 실패해서 비어있다면, 차라리 아까 정리했던 RSS 요약 껍데기라도 표기하도록 백업
-                        if not real_content:
+                        # 💡 [보강 핵심] 만약 원문 크롤링이 실패해 비어있다면, 
+                        # RSS 피드가 제공하는 기본 요약 메타데이터에서 찌꺼기를 제외한 줄만 뽑아 대입합니다.
+                        if not real_content or len(real_content.strip()) < 5:
                             text_clean = re.sub(r'<[^>]+>', '', summary_text)
-                            lines = [l.strip() for l in text_clean.split('\n') if l.strip() and "accno:" not in l.lower() and "size:" not in l.lower()]
-                            real_content = "\n".join(lines).strip() if lines else "상세 본문은 원문 링크를 참조하세요."
+                            lines = []
+                            for l in text_clean.split('\n'):
+                                l_clean = l.strip()
+                                if not l_clean: continue
+                                # 단순 크기, 접수번호 정보 라인은 제외하고 알맹이 문자열만 취합
+                                if "accno:" in l_clean.lower() or "size:" in l_clean.lower() or "filed:" in l_clean.lower():
+                                    continue
+                                lines.append(l_clean)
+                            real_content = "\n".join(lines).strip() if lines else "상세 본문 요약 제한 (원문 링크를 참고하세요)"
 
                         full_content = title_text + " " + real_content
                         positive_factors = extract_positive_factors(full_content)
@@ -174,15 +178,16 @@ def check_sec_filings():
                         clean_summary_en = real_content[:140]
                         
                         if "Form 4" in form_type:
-                            title_tag = f"💎 *[내부자 지분 매수 포착 (Form 4)]* 💎\n⚠️ *내용:* 임원진이 자기 돈으로 주식을 샀습니다!\n"
+                            title_tag = f"💎 *[내부자 지분 매수 포착 (Form 4)]* 💎\n⚠️ *내용:* 임원진이 개인 자금으로 주식을 매수했습니다!\n"
                         elif "지분대량보유" in form_type:
-                            title_tag = f"🐋 *[거물 기관 고래 탑승 (SC 13)]* 🐋\n⚠️ *내용:* 대형 펀드가 지분 5% 이상을 확보했습니다.\n"
+                            title_tag = f"🐋 *[거물 기관 고래 탑승 (SC 13)]* 🐋\n⚠️ *내용:* 대형 기관이 지분 5% 이상을 신규 확보했습니다.\n"
                         elif positive_factors:
                             factors_str = ", ".join(positive_factors)
-                            title_tag = f"🔥 *[초특급 호재 의심 {form_type} 포착]* 🔥\n⚠️ *핵심 호재 요인:* {factors_str}\n"
+                            title_tag = f"🔥 *[초특급 호재 의심 {form_type} 포착]* 🔥\n⚠️ *핵심 요인:* {factors_str}\n"
                         else:
                             title_tag = f"🚨 *[실시간 {form_type}]*\n"
                         
+                        # 어색했던 문구를 깔끔하게 정리
                         message = (
                             f"{title_tag}\n"
                             f"🏢 *대상 기업:* `{company_name}`\n"
@@ -201,12 +206,11 @@ def check_sec_filings():
         log_print(f"❌ 전체 에러 발생: {e}")
 
 def monitor_loop():
-    log_print("🚀 SEC 딥크롤링 우회형 엔진 가동...")
+    log_print("🚀 SEC 딥크롤링 우회 및 백업 통합 엔진 가동...")
     while True:
         check_sec_filings()
         time.sleep(14)
 
-# 🛠️ [Render 최적화] HEAD 요청을 완벽히 수용하도록 핸들러 전면 개편
 class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
