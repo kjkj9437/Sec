@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-# 무료 구글 번역 라이브러리 추가
 from googletrans import Translator
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -15,22 +14,43 @@ HEADERS = {'User-Agent': SEC_EMAIL}
 seen_filings = set()
 translator = Translator()
 
-# 텔레그램 메시지 전송 함수
+# 🔥 주가 상승에 막대한 영향을 미치는 초특급 호재 키워드 세트 (영문 기준)
+# 공시 원문에 아래 단어들이 포함되어 있으면 따로 추출합니다.
+GOOD_NEWS_KEYWORDS = {
+    "merger": "기업 합병 (Merger)",
+    "acquisition": "지분 및 자산 인수 (Acquisition)",
+    "definitive agreement": "구속력 있는 주요 계약 체결 (Definitive Agreement)",
+    "purchase": "대규모 자산/주식 매입 (Purchase)",
+    "joint venture": "합작 투자 회사 설립 (Joint Venture)",
+    "patent": "핵심 특허 취득 (Patent)",
+    "fda": "FDA 승인 관련 (FDA Approval)",
+    "spacex": "스페이스X 관련 호재 (SpaceX Related)" # 최근 트릴러 그룹 사례 반영
+}
+
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try: requests.post(url, json=payload)
     except Exception as e: print(f"텔레그램 전송 실패: {e}")
 
-# 번역 함수 (안전하게 에러 예외 처리)
 def translate_to_korean(text):
     try:
         translated = translator.translate(text, src='en', dest='ko')
         return translated.text
     except Exception:
-        return text # 번역 에러 시 원문 그대로 반환
+        return text
 
-# SEC 모니터링 메인 로직
+# 💡 공시 내용에서 호재 요인을 추출하는 함수
+def extract_positive_factors(text):
+    detected_factors = []
+    text_lower = text.lower()
+    
+    for keyword, korean_meaning in GOOD_NEWS_KEYWORDS.items():
+        if keyword in text_lower:
+            detected_factors.append(korean_meaning)
+            
+    return detected_factors
+
 def check_sec_filings():
     url = "https://data.sec.gov/submissions/latest-filings.json"
     try:
@@ -49,13 +69,10 @@ def check_sec_filings():
             if accession_num not in seen_filings:
                 seen_filings.add(accession_num)
                 
-                # 중대 호재 공시인 8-K만 필터링
                 if form_type == '8-K':
                     cik = filing.get('cik')
                     doc_link = f"https://www.sec.gov/edgar/browse/?CIK={cik}"
                     
-                    # 💡 [업그레이드] 8-K 공시의 세부 주제(항목들)를 가져옵니다.
-                    # 예: "Item 1.01 Entry into a Material Definitive Agreement"
                     items = filing.get('items', '')
                     if items:
                         items_list = [i.strip() for i in items.split(',')]
@@ -63,16 +80,26 @@ def check_sec_filings():
                     else:
                         items_text = "세부 항목 없음"
                     
-                    # 회사명과 세부 공시 주제를 한글로 번역
+                    # 1. 호재 키워드가 영문 텍스트에 포함되어 있는지 추출
+                    positive_factors = extract_positive_factors(items_text)
+                    
+                    # 번역 진행
                     ko_company_name = translate_to_korean(company_name)
                     ko_items_text = translate_to_korean(items_text)
                     
-                    # 메시지 구성
+                    # 2. 호재 여부에 따라 메시지 타이틀 및 내용 분기
+                    if positive_factors:
+                        # 호재 요인이 발견된 경우 상단에 경고등 점멸 및 요인 리스트업
+                        factors_str = ", ".join(positive_factors)
+                        title = f"🔥 *[초특급 호재 의심 종목 포착]* 🔥\n⚠️ *핵심 호재 요인:* {factors_str}\n"
+                    else:
+                        title = f"🚨 *[일반 실시간 8-K 공시]*\n"
+                    
                     message = (
-                        f"🚨 *[실시간 8-K 호재 포착]*\n\n"
+                        f"{title}\n"
                         f"🎫 *종목 티커:* {ticker}\n"
                         f"🏢 *회 사 명:* {ko_company_name}\n"
-                        f"📝 *공시 내용:* {ko_items_text}\n"
+                        f"📝 *공시 요약:* {ko_items_text}\n"
                         f"🇺🇸 *원문 영문:* {items_text}\n"
                         f"🔗 *공시 링크:* [SEC 원문보기]({doc_link})"
                     )
@@ -81,13 +108,12 @@ def check_sec_filings():
         print(f"에러: {e}")
 
 def monitor_loop():
-    print("SEC 실시간 한글화 모니터링 루프 시작...")
+    print("SEC 호재 추출 모니터링 루프 시작...")
     check_sec_filings()
     while True:
         check_sec_filings()
-        time.sleep(3) # 3초마다 체크
+        time.sleep(3)
 
-# Render 무료 서버 유지용 더미 웹서버
 class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
