@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # ⚙️ [변경] 렌더 인바이런먼트(Environment)에 입력한 값을 자동으로 가져옵니다.
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-API_KEY = "d92jappr01qs541v3efgd92jappr01qs541v3eg0"  
+API_KEY = "d92jp11r01qs541v6570d92jp11r01qs541v657g"  
 
 주가_저장소 = {}
 
