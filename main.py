@@ -5,12 +5,18 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # 💡 [무료 꼼수] 렌더(Render)가 포트 안 열렸다고 화내지 못하게 가짜 웹페이지를 여는 함수
+# 💡 수정 전 클래스 모양을 아래처럼 변경해 주세요!
 class 가짜웹서버(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
         self.wfile.write(bytes("BOT_RUNNING", "utf-8"))
+
+    # 🎯 [이거 3줄 추가!] 렌더가 HEAD 핑을 보낼 때 에러 안 나게 받아주는 기능
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def 가짜_포트_개방():
     # 렌더는 10000번 포트나 환경변수로 지정된 포트를 감시합니다.
