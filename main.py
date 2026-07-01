@@ -2,10 +2,10 @@ import json
 import time
 import websocket
 import threading
-import os  # 🎯 렌더의 동적 포트를 가져오기 위해 추가
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# 1. 렌더 우회용 가짜 웹 서버 설정
+# 1. 렌더의 확인 전화를 즉각 받아줄 가짜 웹 서버 정의
 class 가짜웹서버(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -17,15 +17,7 @@ class 가짜웹서버(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-def 가짜_포트_개방():
-    # 🎯 렌더가 주는 환경변수 포트를 자동으로 찾고, 없으면 10000번을 씁니다.
-    포트 = int(os.environ.get('PORT', 10000))
-    서버 = HTTPServer(('0.0.0.0', 포트), 가짜웹서버)
-    print(f"🌐 렌더 우회용 가짜 웹 서버 가동 완료 (포트: {포트})")
-    서버.serve_forever()
-
-# 2. 주식 수급 감시 로직
-# ⚠️ 중요: 계속 튕긴다면 Finnhub.io에서 무료 가입 후 개인 키를 발급받아 교체하세요!
+# 2. 주식 수급 감시 로직 (별도의 독립된 트랙에서 무한 반복)
 API_KEY = "d92jappr01qs541v3efgd92jappr01qs541v3eg0" 
 주가_저장소 = {}
 
@@ -57,12 +49,8 @@ def 연결_성공(ws):
     for 종목 in 인기_스몰캡들:
         ws.send(json.dumps({"type":"subscribe", "symbol": 종목}))
 
-def 개장_시_감시_시작():
-    # 가짜 웹 서버를 백그라운드에서 실행
-    우회스레드 = threading.Thread(target=가짜_포트_개방, daemon=True)
-    우회스레드.start()
-
-    # 🎯 [핵심 수정] 웹소켓이 끊어져도 프로그램이 완전히 끝나지 않도록 무한 루프로 감쌉니다.
+def 주식_감시_백그라운드_루프():
+    # 주식 감시 엔진은 메인 프로그램과 분리되어 혼자 무한 루프를 돕니다.
     while True:
         try:
             print("🔄 실시간 주식 서버(Websocket) 연결 시도 중...")
@@ -75,9 +63,19 @@ def 개장_시_감시_시작():
         except Exception as 에러:
             print(f"❌ 감시 중 에러 발생: {에러}")
         
-        # 연결이 끊기거나 실패하면 5초 쉬고 프로그램 종료 없이 다시 접속 시도
         print("⏳ 서버 연결이 일시적으로 끊겼습니다. 5초 후 자동으로 재연결합니다...")
         time.sleep(5)
 
+# 3. 프로그램 시작점
 if __name__ == "__main__":
-    개장_시_감시_시작()
+    # 🎯 [핵심 변경] 주식 감시를 서브 스레드로 빼서 먼저 실행시킵니다.
+    감시스레드 = threading.Thread(target=주식_감시_백그라운드_루프, daemon=True)
+    감시스레드.start()
+
+    # 🎯 [핵심 변경] 가짜 웹 서버가 메인 쓰레드를 차지하여 렌더의 핑에 24시간 철통 방어합니다.
+    포트 = int(os.environ.get('PORT', 10000))
+    서버 = HTTPServer(('0.0.0.0', 포트), 가짜웹서버)
+    print(f"🌐 [안정] 렌더 우회용 가짜 웹 서버가 메인으로 가동되었습니다. (포트: {포트})")
+    
+    # 여기서 프로그램이 종료되지 않고 렌더의 웹 요청을 받으며 영원히 대기합니다.
+    서버.serve_forever()
