@@ -6,7 +6,7 @@ import os
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# ⚙️ [변경] 렌더 인바이런먼트(Environment)에 입력한 값을 자동으로 가져옵니다.
+# ⚙️ 렌더 인바이런먼트(Environment) 설정 값
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 API_KEY = "d92jp11r01qs541v6570d92jp11r01qs541v657g"  
@@ -49,40 +49,57 @@ class 가짜웹서버(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-# 3. 주식 수급 감시 로직
+# 3. 주식 수급 감시 로직 (1분 누적 변동성 계산)
 def 실시간_데이터_수신(ws, message):
+    현재_시간 = time.time()
     데이터 = json.loads(message)
+    
     if 데이터['type'] == 'trade':
         for 거래 in 데이터['data']:
             종목코드 = 거래['s']
             현재_가격 = 거래['p']
-            현재_거래량 = 거래['v']
             
+            # 최초 데이터 수집 시 기준가격과 기준시간 설정
             if 종목코드 not in 주가_저장소:
-                주가_저장소[종목코드] = {'직전_가격': 현재_가격, '누적_거래량': 현재_거래량}
+                주가_저장소[종목코드] = {'기준_가격': 현재_가격, '기준_시간': 현재_시간}
                 continue
                 
             이전_데이터 = 주가_저장소[종목코드]
-            변동률 = ((현재_가격 - 이전_데이터['직전_가격']) / 이전_데이터['직전_가격']) * 100
             
+            # 🎯 [핵심 수정] 1분(60초)이 지나면 새로운 기준 가격으로 리셋합니다.
+            if 현재_시간 - 이전_데이터['기준_시간'] >= 60:
+                이전_데이터['기준_가격'] = 현재_가격
+                이전_데이터['기준_시간'] = 현재_시간
+                continue
+                
+            # 1분 누적 변동률 계산
+            변동률 = ((현재_가격 - 이전_데이터['기준_가격']) / 이전_데이터['기준_가격']) * 100
+            
+            # 🎯 1분 이내에 누적 2% 이상 급등 포착 시
             if 변동률 >= 2.0:
                 알림내용 = (
-                    f"🚨 [미국 증시] 실시간 급등 포착!\n"
+                    f"🚨 [수급 폭발] 최근 1분 내 급등 포착!\n"
                     f"🔴 종목코드: ${종목코드}\n"
-                    f"💰 현재가격: ${현재_가격:.2f} ({변동률:+.1f}%)\n"
-                    f"🔥 특징: 평소보다 돈이 빠르게 몰리는 중!"
+                    f"💰 현재가격: ${현재_가격:.2f} (1분 전 대비 {변동률:+.1f}%)\n"
+                    f"🔥 특징: 1분 만에 불기둥 쏘는 중!"
                 )
                 print(f"\n{알림내용}")
                 텔레그램_알림_전송(알림내용)
-                이전_데이터['누적_거래량'] = 0
-            else:
-                이전_데이터['누적_거래량'] += 현재_거래량
-            이전_데이터['직전_가격'] = 현재_가격
+                
+                # 알림 발송 후 다시 기준점을 현재로 고정 (연속 스팸 방지)
+                이전_데이터['기준_가격'] = 현재_가격
+                이전_데이터['기준_시간'] = 현재_시간
 
 def 연결_성공(ws):
     print("✅ 미국 증시 실시간 수급 감시 시작...")
-    인기_스몰캡들 = ["CTNT", "UXIN", "TOMZ", "ACUR", "GME"]
-    for 종목 in 인기_스몰캡들:
+    
+    감시_종목_리스트 = [
+        "NVDA", "TSLA", "AAPL", "AMD", "PLTR", "AMZN", "MSFT", "META", "GOOGL",
+        "MSTR", "COIN", "MARA", "RIOT", "SOFI", "NIO", "BABA",
+        "GME", "AMC", "DJT", "CTNT", "UXIN", "TOMZ", "ACUR"
+    ]
+    
+    for 종목 in 감시_종목_리스트:
         ws.send(json.dumps({"type":"subscribe", "symbol": 종목}))
 
 def 주식_감시_백그라운드_루프():
@@ -105,6 +122,6 @@ if __name__ == "__main__":
     감시스레드.start()
 
     포트 = int(os.environ.get('PORT', 10000))
-    서버 = HTTPServer(('0.0.0.0', 포트), 가짜웹서버)  # 오타 수정 완료
+    서버 = HTTPServer(('0.0.0.0', 포트), 가짜웹서버)
     print(f"🌐 [안정] 렌더 우회용 가짜 웹 서버가 메인으로 가동되었습니다. (포트: {포트})")
     서버.serve_forever()
