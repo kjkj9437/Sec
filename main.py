@@ -4,7 +4,7 @@ import websocket # pip install websocket-client 필요
 
 # 💡 실시간 미국 주식 데이터를 무료로 받기 위한 Finnhub API 키입니다.
 # (Finnhub.io 에서 1분만에 이메일로 무료 키를 발급받을 수 있습니다. 우선 샘플 키 제공)
-API_KEY = "sandbox_c8m9b2aad3i9g7ecc9fg" 
+API_KEY = "d92jappr01qs541v3efgd92jappr01qs541v3eg0" 
 
 # 실시간으로 각 종목의 가격 정보를 임시 저장할 금고
 주가_저장소 = {}
